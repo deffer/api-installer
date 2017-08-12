@@ -1,0 +1,27 @@
+#!/bin/bash
+#
+# Uninstalls API previusly installed by api-installer
+# usage: sudo /etc/api-installer/api-uninstall APINAME
+#
+# Maintainer, please make sure this is not easily executable
+#   eg. use chmod 744 
+#
+# version  $(build_version)
+#
+api=$1
+if [ "$api" == "" ]; then
+  echo "Please provide api name"
+  exit 0
+else
+  echo -e "Removing $api"
+  logger api-install removing api $api
+  systemctl stop $api
+  systemctl disable $api
+  rm -rf /etc/$api
+  rm -rf /opt/$api
+  rm /usr/lib/systemd/system/$api.service
+  rm -rf /var/log/apis/$api
+  rm -rf /usr/share/apis/$api
+  systemctl reset-failed
+fi
+

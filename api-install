@@ -1,0 +1,347 @@
+#!/bin/bash
+#
+# API initializer
+#
+# description: Initializes environment for new java API
+# version  $(build_version)
+# usage 1: sudo api-install [-f] idcards "Id cards application"
+# usage 2: api-install list"
+
+display_usage() {
+	echo -e "\nUsage:\n        sudo $0 [-f] SERVICE-NAME \"SERVICE DESCRIPTION\" \n" 
+	echo -e "Flag -f will force override previous settings (except property file)" 
+	echo -e "With -f the description parameter is optional and will be taken from existing file" 
+	echo -e "To simply list installed APIs, run 'api-install list'" 
+} 
+
+# --------------------------
+# Check if string is numeric
+# -------------------------
+function isPID {
+	case $1 in
+		''|*[!0-9]*) echo false ;;
+		*) echo true ;;
+	esac
+}
+
+# --------------------------------------
+# Generate comma separated list of ports
+# -------------------------------------
+function getPorts {
+	pidisnumber=$(isPID "$1")
+	if [ $pidisnumber == true ]; then
+		# list ports, space or newline separated
+		serviceports=$(netstat -tnlp | grep $1/java | awk '{ print $4, $7 }' | gawk 'match($0, /.*:([^ ]*) ([^\/]+)\/.*/, a) { print  a[1] }')
+		# convert space and newline into comma and strip last comma
+		oneline=$(echo $serviceports | tr '\n' ',' | tr ' ' ',' | sed 's/,$//')
+		echo $oneline
+	else
+		echo "_"
+	fi
+
+}
+
+function listAll {
+	for i in $(ls -1 /usr/share/apis/); do
+		servicefile=/usr/lib/systemd/system/$i.service
+		if [ -e $servicefile ]; then
+			servicestatus=`systemctl is-active $i`
+			serviceenabled=`systemctl is-enabled $i`
+			#  identity-v1.service - Identity API
+			servicedescr=$(systemctl status $i | sed q | sed "s/.*$i.service - \(.*\)$/\1/")
+			serviceport="_"
+			servicepid="_"
+			
+			if [ $USER == "root" ]; then
+				if [ $servicestatus == "active" ]; then
+					#  Main PID: 18342 (java)
+					servicepid=$(systemctl status $i | grep "Main PID" | sed "s/.*Main PID: \(.*\) .*$/\1/")
+					serviceport=$(getPorts "$servicepid")
+				fi
+			fi
+			echo -e "$i\t$servicestatus\t$serviceenabled\t$serviceport\t$servicepid\t$servicedescr"
+		fi
+	done
+}
+
+
+dump(){
+	if [ ! -d /usr/share/apis/ ]; then
+		return 1
+	else
+		listAll
+	fi
+}
+
+# --------------------------------------------
+# This will display list of all installed APIs
+# --------------------------------------------
+show_list(){
+	if [ ! -d /usr/share/apis/ ]; then
+		echo -e "$(tput setaf 1)No APIs found$(tput sgr0)"
+		return 1
+	fi
+	
+	blue=$(tput setaf 4)
+	green=$(tput setaf 2)
+	normal=$(tput sgr0)
+
+	#printf "%40s\n" "${blue}This text is blue${normal}"
+
+	headerprinted=false
+	
+	# todo use listAll and iterate over tab separated list of services and their fields
+	for i in $(ls -1 /usr/share/apis/); do
+		servicefile=/usr/lib/systemd/system/$i.service
+		if [ -e $servicefile ]; then
+
+			if [ $headerprinted == false ]; then
+				if [ $USER == "root" ]; then
+						printf "%-30s %30s %30s %15s\n" "API SERVICE" "${normal}STATUS${normal}" "${normal}AUTOSTART${normal}" "Port(s)/PID"
+						printf "**************************************************************************************\n"
+				else
+					printf "%-30s %30s %30s\n" "API SERVICE" "${normal}STATUS${normal}" "${normal}AUTOSTART${normal}"
+					printf "**********************************************************************\n"
+				fi
+				headerprinted=true
+			fi
+
+			servicestatus=`systemctl is-active $i`
+			[ "$servicestatus" == "active" ] && sstatus="${green}RUNNING${normal}" || sstatus="${blue}$servicestatus${normal}"
+
+			serviceenabled=`systemctl is-enabled $i`
+			[ "$serviceenabled" == "enabled" ] && serviceenabled="${green}enabled${normal}" || serviceenabled="${normal}$serviceenabled${normal}"
+
+			#  identity-v1.service - Identity API
+			servicedescr=$(systemctl status $i | sed q | sed "s/.*$i.service - \(.*\)$/\1/")
+			servicedescr="${normal}$servicedescr${normal}"
+					
+
+			if [ $USER == "root" ]; then
+				serviceport=" "
+				if [ $servicestatus == "active" ]; then
+					#  Main PID: 18342 (java)
+					servicepid=$(systemctl status $i | grep "Main PID" | sed "s/.*Main PID: \(.*\) .*$/\1/")
+					serviceport=$(getPorts "$servicepid")
+				fi
+				printf "%-30s %30s %30s %15s %s\n" $i "[$sstatus]" "[$serviceenabled]" "$serviceport/$servicepid" "$servicedescr"
+			else
+				printf "%-30s %30s %30s %s\n" $i "[$sstatus]" "[$serviceenabled]" "$servicedescr"
+			fi
+		else
+			echo "Service file for $i is not found"
+		fi
+	done
+
+	echo "----------"
+		if [ $USER != "root" ]; then
+				echo "(Run as root to see ports)"
+		fi
+	echo "Locations of interest:"
+	echo "/usr/lib/systemd/system/*.service"
+	echo "/etc/systemd/system/multi-user.target.wants/*.service"
+	ls /usr/share/apis/
+}
+
+# --------------------------------------------------
+#           START
+# --------------------------------------------------
+if [[ ($# -eq 1) && ($1 == "dump") ]]; then
+	dump
+	exit 0
+fi
+
+if [[ ($# -eq 1) && ($1 == "list") ]]; then
+	show_list
+	exit 0
+fi
+
+# check whether user had supplied -h or --help . If yes display usage 
+if [[ ( $# == "--help") ||  $# == "-h" ]]; then 
+	display_usage
+	exit 0
+fi 
+
+# if less than two arguments supplied, display usage 
+if [  $# -le 1 ]; then 
+	display_usage
+	exit 1
+fi 
+
+ 
+# display usage if the script is not run as root user 
+if [[ $USER != "root" ]]; then 
+	echo "This script must be run as root!" 
+	exit 1
+fi 
+
+# extract parameters
+if [ $1 != "-f" ]; then
+	forceoverride=false
+	name=$1
+	if [  $# -gt 1 ]; then 
+		descr=$2
+	fi	
+else
+	forceoverride=true
+	name=$2
+	if [  $# -gt 2 ]; then 
+		descr=$3    
+	fi 
+fi
+
+if [ "$descr" == "" ]; then
+	#servicedescr=`systemctl status $name | sed q | sed 's/.* - \(.*\)$/\1/'`
+	servicedescr=$(systemctl status $name | sed q | sed "s/.*$name.service - \(.*\)$/\1/")
+	if [[ $servicedescr == *"could not be found"* ]]; then
+		echo -e "Service $name not found"
+	else
+		descr=$servicedescr
+		echo "Using existing description $descr"		
+	fi	
+fi
+
+if [ "$descr" == "" ]; then
+	echo "[ERROR] Please provide description for new service\n"
+	exit 1
+fi	
+
+echo -e "Setting up $name - $descr"
+
+servicefile=/usr/lib/systemd/system/$name.service
+appuser=$name
+appgroup=$name
+admingroup=jenkins
+
+
+# Create directories
+mkdir -p /opt/$name
+mkdir -p /etc/$name
+mkdir -p /var/lib/$name/tmp
+mkdir -p /var/log/apis/$name
+mkdir -p /var/run/$name
+
+
+#Add the systemd service file
+servicefilewrite=true
+if [ -e $servicefile ]; then
+  if [ $forceoverride = true ]; then
+	echo "File $servicefile already exists! Overriding..."	
+	rm $servicefile
+  else
+	servicefilewrite=false
+	echo "File $servicefile already exists! To force override, run with -f flag"	
+  fi  
+fi
+  
+if [ $servicefilewrite = true ]; then
+	echo "[Unit]" >> $servicefile  
+	echo "Description=$descr" >> $servicefile 
+	echo "" >> $servicefile 
+	echo "[Service]" >> $servicefile  
+	echo "Type=forking" >> $servicefile  
+	echo "TimeoutStopSec=60" >> $servicefile  
+	echo "PIDFile=/var/run/$name/$name.pid" >> $servicefile  
+	echo "ExecStart=/opt/$name/$name start" >> $servicefile  
+	echo "ExecReload=/opt/$name/$name restart" >> $servicefile  
+	echo "ExecStop=/opt/$name/$name stop" >> $servicefile  
+	echo "PrivateTmp=true" >> $servicefile  
+	echo "" >> $servicefile 
+	echo "[Install]" >> $servicefile  
+	echo "WantedBy=multi-user.target" >> $servicefile  
+fi
+
+#Add an application.properties file
+propname=/etc/$name/application.properties
+if [ -e $propname ]; then  
+	echo "File $propname already exists!"  
+else
+	echo "#server.port=8080" >> $propname
+	echo "#server.contextPath=/api/v1" >> $propname  
+fi
+  
+
+# Add the run (former initd) script
+linkwrite=true
+if [ -e /opt/$name/$name ]; then
+  if [ $forceoverride = true ]; then
+	echo "File /opt/$name/$name already exists! Deleting..."
+	rm /opt/$name/$name
+  else	
+	linkwrite=false
+	echo "File /opt/$name/$name already exists! To force override, run with -f flag"
+  fi
+fi  
+
+if [ $linkwrite = true ]; then
+  ln -s /etc/api-installer/api.initd.template /opt/$name/$name
+fi
+
+
+# Create user if does not exist
+/usr/sbin/groupadd -f ${appgroup}
+/usr/sbin/groupadd -f ${admingroup}
+id ${appuser} &>/dev/null || /usr/sbin/useradd -r -d /etc/${name} -g ${appgroup} ${appuser}
+
+# create /usr/share/apis/ folder if it doesnt exist
+if [ ! -d /usr/share/apis ]; then
+  mkdir -p /usr/share/apis
+  chmod 2775 /usr/share/apis
+  chown root:$admingroup /usr/share/apis
+fi  
+
+# jars folder
+if [ $forceoverride = true ] || [ ! -d /usr/share/apis/$name ]; then
+	mkdir -p /usr/share/apis/$name
+	chmod 2775 /usr/share/apis/$name
+	chown root:$admingroup /usr/share/apis/$name
+fi  
+
+
+# java jar runner (former initd) script
+chmod 755 /opt/${name}/${name}
+
+# systemd service file
+chmod 664 /usr/lib/systemd/system/$name.service
+
+# properties folder
+chmod 2775 /etc/$name
+chown root:$admingroup /etc/$name
+
+
+# tmp folder
+chmod 2775 /var/lib/$name 
+chown $appuser:$admingroup /var/lib/$name
+
+chmod 2775 /var/lib/$name/tmp 
+chown $appuser:$admingroup /var/lib/$name/tmp
+
+# log and pid locations
+if [ ! -d /var/log/apis ]; then
+	mkdir -p /var/log/apis
+	chmod 2775 /var/log/apis
+	chown root:$admingroup /var/log/apis
+fi 
+
+chmod 755 /var/log/apis/$name
+chmod 755 /var/run/$name
+chown $appuser:$admingroup /var/log/apis/$name
+chown $appuser:root /var/run/$name
+
+systemctl daemon-reload
+systemctl enable $name
+
+
+echo ""
+echo "================================================="
+echo "Successfully configured environment for $name"
+echo "Dont forget to configure properties and copy jar file into locations below:"
+echo ""
+echo -e "JAR:\t\t/usr/share/apis/${name}/*.jar"
+echo -e "PROPERTIES:\t/etc/$name/application.properties"
+echo -e "LOGS:\t\t/var/log/apis/$name/console.log"
+echo "================================================="
+echo ""
+
+exit 0
+

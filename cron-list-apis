@@ -1,0 +1,6 @@
+#!/bin/bash
+tempfilename=/var/apiservices/status_temp
+filename=/var/apiservices/status
+echo `date` > $tempfilename
+api-install dump >> $tempfilename
+mv $tempfilename $filename

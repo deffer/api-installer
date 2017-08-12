@@ -1,0 +1,124 @@
+#!/bin/sh
+#
+# Java process
+#
+# chkconfig: 2345 55 25
+# description: Java process
+# version  $(build_version)
+
+# Source function library.
+. /etc/rc.d/init.d/functions
+
+prog="$(basename $0)"
+
+user=$prog
+admingroup=jenkins
+killdelay=15
+
+JAVA_HOME=/usr/lib/jvm/java
+tmp=/var/lib/$prog/tmp
+# app_jar="/usr/share/apis/$prog.jar"
+# get last modified .jar file
+app_jar=$(ls /usr/share/apis/$prog -t | grep -i -E '\.(jar)$' | head -1)
+jar_path="/usr/share/apis/$prog/$app_jar"
+
+console=/var/log/apis/$prog/console.log
+lockfile=/var/lock/subsys/$prog
+pidfile=/var/run/$prog/$prog.pid
+if [ ! -d /var/run/$prog ]; then
+  mkdir -p /var/run/$prog
+  chmod 775 /var/run/$prog
+  chown $user:root /var/run/$prog
+fi 
+
+java_opts="-server -Djava.io.tmpdir=$tmp"
+app_opts="--spring.config.location=file:/etc/$prog/application.properties"
+
+[ -e /etc/sysconfig/$prog ] && . /etc/sysconfig/$prog
+[ -e /etc/$prog/java.conf ] && . /etc/$prog/java.conf
+
+if [ -z "$exec" ]; then exec="$JAVA_HOME/bin/java $java_opts -jar $jar_path $app_opts"; fi
+
+
+cleanup(){
+  releases=$(ls -d1tr /usr/share/apis/$prog/** | grep -i -E '^\S+\.(jar)$' | wc -l)
+  echo Found $releases releases
+  if [ $releases -ge 4 ]; then
+    ls -d1tr /usr/share/apis/$prog/** | grep -i -E '^\S+\.(jar)$' | head -n-3 | xargs rm --
+    deleted=`expr $releases - 3`
+    logger api-install cleaned up $deleted older releases of $prog
+  fi
+}
+
+start() {
+    echo -n $"Starting $prog:"
+    if [ -z "$app_jar" ]; then
+      echo -n "Can't find any .jar file in the $jar_path"
+      echo -n "Can't find any .jar file in the $jar_path" >> $console
+      chown $user:$admingroup $console
+      exit -1
+    fi
+    cd $tmp
+    daemon --pidfile=$pidfile --user=$user "$exec >>$console 2>&1 & echo \$! > $pidfile"
+    retval=$?
+    echo
+    if [ $retval -eq 0 ]; then
+      touch $lockfile
+      cleanup
+    fi
+    return $retval
+}
+
+stop() {
+    echo -n $"Stopping $prog: "
+    killproc -p $pidfile -d $killdelay $prog
+    retval=$?
+    echo
+    [ $retval -eq 0 ] && rm -f $lockfile
+    return $retval
+}
+
+
+restart() {
+    stop
+    start
+}
+
+rh_status() {
+    # run checks to determine if the service is running or use generic status
+    status -p $pidfile $prog
+}
+
+rh_status_q() {
+    rh_status >/dev/null 2>&1
+}
+
+
+case "$1" in
+    start)
+        rh_status_q && exit 0
+        $1
+        ;;
+    stop)
+        rh_status_q || exit 0
+        $1
+        ;;
+    restart)
+        $1
+        ;;
+    reload)
+        rh_status_q || exit 7
+        $1
+        ;;
+    status)
+        rh_status
+        ;;
+    condrestart)
+        rh_status_q || exit 0
+        restart
+        ;;
+    *)
+        echo $"Usage: $0 {start|stop|status|restart|condrestart}"
+        exit 2
+esac
+exit $?
