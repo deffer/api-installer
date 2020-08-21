@@ -1,0 +1,126 @@
+#!/bin/bash
+#
+# key locations
+# /etc/systemd/system/prometheus.service (service, created by this script)
+# /var/lib/prometheus (tsdb - data files created and managed by prometheus)
+# /etc/prometheus/{rules,rules.d,files_sd} (the best place for rule files)
+# /etc/prometheus/{consoles,console_libraries} (console files from prometheus distribution)
+# /etc/prometheus/prometheus.yml (main config)
+# /usr/local/bin/ (binaries)
+
+
+# display usage if the script is not run with the root privilege 
+normal=$(tput sgr0)
+red=$(tput setaf 1)
+
+if (( $EUID !=0 )); then 
+	echo "This script must be run as root!" 
+	exit 1
+fi  
+
+if service is-active --quiet prometheus; then
+	echo "${red}Prometheus service is already installed and running. Stop the service before running this script${normal}"
+	exit 1
+fi
+
+# extract parameters
+if [[ ($# -eq 1) && ($1 == "-f") ]]; then 
+	forceoverride=true	
+	echo "Force override is set to true"
+else
+	forceoverride=false 
+fi 
+
+RELEASE="2.20.1"
+
+if [ ! -e prometheus-${RELEASE}.linux-amd64.tar.gz]; then
+  wget https://github.com/prometheus/prometheus/releases/download/v${RELEASE}/prometheus-${RELEASE}.linux-amd64.tar.gz
+  tar xvf prometheus-${RELEASE}.linux-amd64.tar.gz
+fi  
+cd prometheus-${RELEASE}.linux-amd64/
+
+# create user and group
+groupadd --system prometheus
+useradd -s /sbin/nologin -r -g prometheus prometheus
+
+# create folders
+mkdir -p /etc/prometheus/{rules,rules.d,files_sd}  
+mkdir /var/lib/prometheus
+
+# copy files
+cp prometheus promtool tsdb /usr/local/bin/
+cp -r consoles/ console_libraries/ /etc/prometheus/
+
+chown -R prometheus:prometheus /etc/prometheus/  /var/lib/prometheus/
+chmod -R 775 /etc/prometheus/ /var/lib/prometheus/
+
+if [ ! -e /etc/prometheus/prometheus.yml ]; then
+	echo "Copying sample prometheus file into /etc/prometheus/prometheus.yml"
+	cp prometheus.yml /etc/prometheus/
+	chown -R prometheus:prometheus /etc/prometheus/prometheus.yml
+fi	
+
+# makes /usr/local/bin files executable?
+
+# create service file
+# TODO overwrite if exists
+servicefile=/etc/systemd/system/prometheus.service
+
+#Add the systemd service file
+servicefilewrite=true
+if [ -e $servicefile ]; then
+  if [ $forceoverride = true ]; then
+	echo "File $servicefile already exists! Overriding..."	
+	rm $servicefile
+  else
+	servicefilewrite=false
+	echo "File $servicefile already exists! To force override, run with -f flag"	
+  fi  
+else
+      echo "Creating service file"	
+fi
+  
+if [ $servicefilewrite = true ]; then
+
+	echo "[Unit]" >> $servicefile  
+	echo "Description=Prometheus systemd service unit" >> $servicefile 
+	echo "Wants=network-online.target" >> $servicefile 
+	echo "After=network-online.target" >> $servicefile 
+	echo "" >> $servicefile 
+	echo "[Service]" >> $servicefile  
+	echo "Type=simple" >> $servicefile  
+	echo "User=prometheus" >> $servicefile  
+	echo "Group=prometheus" >> $servicefile  
+	echo "ExecStart=/usr/local/bin/prometheus \\" >> $servicefile  
+	echo "--config.file=/etc/prometheus/prometheus.yml \\" >> $servicefile  
+	echo "--storage.tsdb.path=/var/lib/prometheus \\" >> $servicefile  
+	echo "--web.console.templates=/etc/prometheus/consoles \\" >> $servicefile  
+	echo "--web.console.libraries=/etc/prometheus/console_libraries \\" >> $servicefile  
+	echo "--web.listen-address=0.0.0.0:9090" >> $servicefile  
+	echo "" >> $servicefile  
+	
+	echo "ExecReload=/bin/kill -HUP $MAINPID" >> $servicefile 
+	
+	echo "SyslogIdentifier=prometheus" >> $servicefile  
+	echo "Restart=always" >> $servicefile  
+	echo "" >> $servicefile 
+	echo "[Install]" >> $servicefile  
+	echo "WantedBy=multi-user.target" >> $servicefile
+fi
+
+if [ ! -e /etc/rsyslog.d/prometheus.conf ];then
+  echo "Redirecting prometheus logs into separate file"
+  echo "prometheus.*     /var/log/prometheus.log" >> /etc/rsyslog.d/prometheus.conf
+  echo "& stop" >> /etc/rsyslog.d/prometheus.conf
+  #  chown syslog:adm /var/log/prometheus.log
+fi
+
+if systemctl is-enabled --quiet prometheus; then
+	echo "Already enabled"
+else
+	echo "Enabling prometheus service"	
+	systemctl enable prometheus
+fi
+
+green=$(tput setaf 2)
+echo "${green}Remember to update /etc/prometheus/prometheus.yml and restart rsyslog before starting the service${normal}"
