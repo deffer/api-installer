@@ -33,7 +33,7 @@ fi
 
 RELEASE="2.20.1"
 
-if [ ! -e prometheus-${RELEASE}.linux-amd64.tar.gz]; then
+if [ ! -e prometheus-${RELEASE}.linux-amd64.tar.gz ]; then
   wget https://github.com/prometheus/prometheus/releases/download/v${RELEASE}/prometheus-${RELEASE}.linux-amd64.tar.gz
   tar xvf prometheus-${RELEASE}.linux-amd64.tar.gz
 fi  
